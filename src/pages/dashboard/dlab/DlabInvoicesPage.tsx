@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { format } from "date-fns";
-import { FilePlus2, Printer, CheckCircle2, Landmark, Layers, Ban } from "lucide-react";
+import { FilePlus2, Printer, CheckCircle2, Landmark, Layers, Ban, Banknote, X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import type { AgingBucket } from "@/lib/arAging";
+import { AGING_LABELS } from "@/lib/arAging";
+import { dueDateOf, invoiceBucket, openBalance, overdueDays } from "@/lib/labAging";
+import { toAging } from "./billing/agingRows";
+import InvoiceDetailDrawer from "./billing/InvoiceDetailDrawer";
+import PaymentAllocationModal from "./billing/PaymentAllocationModal";
 import { useLabRecords, type LabRecord } from "@/hooks/useLabRecords";
 import { applyToInvoice } from "./dlabLinks";
 import { PageHeader } from "@/components/dashboard/PageHeader";
@@ -24,7 +31,7 @@ import { InvoiceBuilderDialog, type BuilderResult } from "./InvoiceBuilderDialog
 
 const statusTone: Record<string, "default" | "secondary" | "destructive" | "outline"> = { paid: "default", partial: "secondary", unpaid: "destructive", void: "outline" };
 
-export default function DlabInvoicesPage() {
+export default function DlabInvoicesPage({ agingFilter = null, onClearAging }: { agingFilter?: AgingBucket | null; onClearAging?: () => void } = {}) {
   const { currentOrg } = useOrg();
   const qc = useQueryClient();
   const cases = useLabCases();
@@ -43,6 +50,10 @@ export default function DlabInvoicesPage() {
   const [build, setBuild] = useState<{ client: string; cases: any[]; lines: LineItem[] } | null>(null);
   const [voiding, setVoiding] = useState<LabInvoiceRow | null>(null);
   const [voidReason, setVoidReason] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batch, setBatch] = useState<LabInvoiceRow[]>([]);
+  const [detail, setDetail] = useState<LabInvoiceRow | null>(null);
+  const [collect, setCollect] = useState<LabInvoiceRow | null>(null);
 
   const linesByInvoice = useMemo(() => {
     const m = new Map<string, LabRecord>();
@@ -65,6 +76,7 @@ export default function DlabInvoicesPage() {
   const groups = groupForBatch(ready as any[], (c) => clientOf(c), (c: any) => c.delivered_at || c.due_date || c.updated_at, from || undefined, to || undefined);
   const filtered = invoices.filter((i) =>
     (status === "all" || i.status === status) &&
+    (!agingFilter || invoiceBucket(toAging(i)) === agingFilter) &&
     `${i.invoice_number} ${i.clinic_code} ${i.clinic_doctor_name} ${i.patient_name}`.toLowerCase().includes(q.toLowerCase()));
   const caseOf = (id: string | null) => (cases.data || []).find((c: any) => c.id === id) as any;
 
@@ -194,28 +206,46 @@ export default function DlabInvoicesPage() {
           </Select>
         </div>
 
+        {(agingFilter || selected.size > 0) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+            {agingFilter && <Badge variant="secondary" className="gap-1">Aging: {AGING_LABELS[agingFilter]}<button aria-label="Clear aging filter" onClick={onClearAging}><X className="h-3 w-3" /></button></Badge>}
+            {selected.size > 0 && <>
+              <span className="ml-auto">{selected.size} selected</span>
+              <Button size="sm" variant="outline" onClick={() => setBatch(invoices.filter((i) => selected.has(i.id)))}><Printer className="mr-1 h-4 w-4" />Print selected</Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+            </>}
+          </div>
+        )}
+
         <Card><CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-left"><tr>{["Invoice", "Date", "Clinic", "Patient", "Lines", "Total", "Paid", "Status", ""].map((h) => <th key={h} className="p-3 font-medium">{h}</th>)}</tr></thead>
+            <thead className="bg-muted/50 text-left"><tr>{<th className="w-8 p-3"><Checkbox aria-label="Select all" checked={filtered.length > 0 && filtered.every((i) => selected.has(i.id))} onCheckedChange={(v) => setSelected(v ? new Set(filtered.map((i) => i.id)) : new Set())} /></th>{["Invoice", "Date", "Due", "Clinic", "Patient", "Lines", "Total", "Balance", "Overdue", "Status", ""].map((h) => <th key={h} className={`p-3 font-medium ${["Total", "Balance", "Overdue"].includes(h) ? "text-right" : ""}`}>{h}</th>)}</tr></thead>
             <tbody>
-              {filtered.length === 0 && <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">No invoices yet.</td></tr>}
-              {filtered.map((i) => (
-                <tr key={i.id} className={`border-t ${i.status === "void" ? "text-muted-foreground line-through" : ""}`}>
+              {filtered.length === 0 && <tr><td colSpan={12} className="p-6 text-center text-muted-foreground">No invoices yet.</td></tr>}
+              {filtered.map((i) => {
+                const a = toAging(i); const bal = openBalance(a); const od = overdueDays(a);
+                return (
+                <tr key={i.id} onClick={() => setDetail(i)} className={`cursor-pointer border-t hover:bg-muted/40 ${i.status === "void" ? "text-muted-foreground line-through" : ""} ${selected.has(i.id) ? "bg-muted/30" : ""}`}>
+                  <td className="p-3" onClick={(e) => e.stopPropagation()}><Checkbox aria-label={`Select ${i.invoice_number}`} checked={selected.has(i.id)} onCheckedChange={(v) => setSelected((s) => { const n = new Set(s); v ? n.add(i.id) : n.delete(i.id); return n; })} /></td>
                   <td className="p-3 font-medium">{i.invoice_number}</td>
-                  <td className="p-3">{format(new Date(i.invoice_date), "dd MMM yyyy")}</td>
+                  <td className="p-3 whitespace-nowrap">{format(new Date(i.invoice_date), "dd MMM yy")}</td>
+                  <td className="p-3 whitespace-nowrap">{format(new Date(dueDateOf(i.invoice_date) + "T00:00:00"), "dd MMM yy")}</td>
                   <td className="p-3">{i.clinic_code}</td>
                   <td className="p-3">{i.patient_name || "—"}</td>
                   <td className="p-3 tabular-nums">{linesByInvoice.get(i.id)?.data?.lines?.length || 1}</td>
-                  <td className="p-3 tabular-nums">{money(i.total_amount)}</td>
-                  <td className="p-3 tabular-nums">{money(i.amount_paid)}</td>
+                  <td className="p-3 text-right tabular-nums">{money(i.total_amount)}</td>
+                  <td className="p-3 text-right font-medium tabular-nums">{bal > 0 ? money(bal) : "—"}</td>
+                  <td className={`p-3 text-right tabular-nums ${od > 0 ? "font-medium text-destructive" : "text-muted-foreground"}`}>{od > 0 ? `${od}d` : "—"}</td>
                   <td className="p-3"><Badge variant={statusTone[i.status] || "outline"} className="capitalize">{i.status}</Badge></td>
-                  <td className="p-3 flex gap-1 justify-end">
+                  <td className="p-3 flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                    {bal > 0 && <Button size="sm" variant="outline" onClick={() => setCollect(i)}><Banknote className="mr-1 h-4 w-4" />Collect</Button>}
                     {!["paid", "void"].includes(i.status) && <Button size="sm" variant="ghost" disabled={busy === i.id} title="Mark paid" onClick={() => markPaid(i)}><CheckCircle2 className="h-4 w-4" /></Button>}
                     {i.status !== "void" && Number(i.amount_paid) === 0 && <Button size="sm" variant="ghost" title="Void invoice" onClick={() => setVoiding(i)}><Ban className="h-4 w-4" /></Button>}
                     <Button size="sm" variant="outline" title="Print tax invoice" onClick={() => setView(i)}><Printer className="h-4 w-4" /></Button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </CardContent></Card>
@@ -230,6 +260,22 @@ export default function DlabInvoicesPage() {
           <Button className="print:hidden" onClick={() => window.print()}><Printer className="mr-1 h-4 w-4" />Print invoice</Button>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={batch.length > 0} onOpenChange={(o) => !o && setBatch([])}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto print:max-h-none print:max-w-none print:overflow-visible print:shadow-none print:border-0">
+          <DialogHeader className="print:hidden"><DialogTitle>Print {batch.length} invoices</DialogTitle></DialogHeader>
+          {batch.map((b, k) => (
+            <div key={b.id} className={k < batch.length - 1 ? "border-b pb-6 print:break-after-page print:border-0" : ""}>
+              <InvoiceSheet inv={b} labName={currentOrg?.org_name || "Dental Lab"} c={caseOf(b.lab_case_id)} rec={linesByInvoice.get(b.id)} bank={bank?.data} phone={(currentOrg as any)?.phone} />
+            </div>
+          ))}
+          <Button className="print:hidden" onClick={() => window.print()}><Printer className="mr-1 h-4 w-4" />Print all</Button>
+        </DialogContent>
+      </Dialog>
+
+      <InvoiceDetailDrawer invoice={detail} cases={cases.data || []} linesRec={detail ? linesByInvoice.get(detail.id) : undefined} onOpenChange={(o) => !o && setDetail(null)}
+        onCollect={(i) => { setDetail(null); setCollect(i); }} onPrint={(i) => { setDetail(null); setView(i); }} />
+      <PaymentAllocationModal open={!!collect} invoiceId={collect?.id} onOpenChange={(o) => !o && setCollect(null)} />
 
       <Dialog open={!!voiding} onOpenChange={(o) => { if (!o) { setVoiding(null); setVoidReason(""); } }}>
         <DialogContent>

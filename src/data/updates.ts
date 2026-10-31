@@ -13,6 +13,19 @@ export interface UpdateEntry {
 
 export const updates: UpdateEntry[] = [
   {
+    version: "v2.44.0",
+    date: "October 31, 2026",
+    title: "Faster lab billing: aging cards, invoice panel and payment allocation",
+    kind: "feature",
+    items: [
+      { kind: "feature", text: "Aging cards (Current, 31–60, 61–90, 90+) at the top of Invoices — click one to filter the list." },
+      { kind: "feature", text: "Invoices show due date, balance due and days overdue, with a Collect button on each unpaid invoice." },
+      { kind: "feature", text: "Click an invoice to see its cases (patient, doctor, restoration, shade), line items and payment history." },
+      { kind: "feature", text: "Record one payment and split it across a clinic's invoices, oldest first or by hand, then print a receipt." },
+      { kind: "feature", text: "Select several invoices to print them together; apply leftover credit to open invoices in one click." },
+    ],
+  },
+  {
     version: "v2.43.0",
     date: "October 31, 2026",
     title: "Statements moved into client accounts",

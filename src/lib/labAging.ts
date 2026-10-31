@@ -74,3 +74,42 @@ export function validateAllocations(amount: number, allocs: Allocation[], invoic
   }
   return errs;
 }
+
+/** Standard lab payment terms (net days) when a client has none set. */
+export const DEFAULT_TERMS_DAYS = 30;
+
+/** Due date (yyyy-mm-dd) = invoice date + payment terms. */
+export function dueDateOf(invoiceDate: string, termsDays = DEFAULT_TERMS_DAYS): string {
+  const d = new Date(invoiceDate.slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + termsDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Days past the due date (0 when not yet due or nothing is owed). */
+export function overdueDays(inv: AgingInvoice, today = new Date(), termsDays = DEFAULT_TERMS_DAYS): number {
+  if (openBalance(inv) <= 0) return 0;
+  return daysOutstanding(dueDateOf(inv.invoice_date, termsDays), today);
+}
+
+/** Aging bucket of a single invoice's open balance, or null when fully settled. */
+export function invoiceBucket(inv: AgingInvoice, today = new Date()): AgingBucket | null {
+  if (openBalance(inv) <= 0) return null;
+  return agingBucket(daysOutstanding(inv.invoice_date, today));
+}
+
+/** Totals and counts of open balances per aging bucket. */
+export function bucketTotals(invoices: AgingInvoice[], today = new Date()): Record<AgingBucket, { amount: number; count: number }> {
+  const t: Record<AgingBucket, { amount: number; count: number }> = { current: { amount: 0, count: 0 }, "31_60": { amount: 0, count: 0 }, "61_90": { amount: 0, count: 0 }, "90_plus": { amount: 0, count: 0 } };
+  for (const inv of invoices) {
+    const b = invoiceBucket(inv, today);
+    if (!b) continue;
+    t[b].amount = r2(t[b].amount + openBalance(inv));
+    t[b].count += 1;
+  }
+  return t;
+}
+
+/** Use a client's unapplied credit against open invoices (oldest first); returns what's left. */
+export function applyCredit(credit: number, invoices: AgingInvoice[]) {
+  return allocateOldestFirst(credit, invoices);
+}
